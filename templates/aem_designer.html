@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}AEM Source Designer{% endblock %}
+{% block content_class %}aem-designer-content{% endblock %}
+{% block content %}
+  <div id="aem-designer-root" class="aem-designer-app" data-aem-page="designer" data-csrf="{{ csrf_token() }}">
+    <header class="aem-designer-header">
+      <h1>AEM Source Designer</h1>
+      <p class="aem-designer-hint">Pick a tool (or press <strong>1–5</strong>): <strong>Polygon</strong> — click vertices then <strong>Close &amp; Pack</strong> (right-click / Enter) to fill a zone with circles; <strong>Circle / Ellipse / Line</strong> — press-drag on the canvas to place a single shape; <strong>Select</strong> — click an element to drag, resize (↑↓, and ←→ for an ellipse&rsquo;s second axis), recolour (+/−) or delete (Del).</p>
+    </header>
+    <div id="aem-message" class="aem-message" role="status" aria-live="polite"></div>
+    <div class="aem-designer-layout">
+      <aside class="aem-designer-sidebar">
+        <form id="aem-design-form" class="aem-designer-form">
+          <!-- Editable simulation parameters, mirroring the reference source designer's
+               docked SettingsPanel (source_designer.py: SettingsPanel.FIELDS). Each field
+               applies on change/Enter with live ✓/error feedback; the orientation toggle
+               re-frames the canvas. default_c stays hidden (adjusted per-element via +/-). -->
+          <input type="hidden" name="default_c" value="10">
+          <input type="hidden" name="orientation" value="vertical">
+          <fieldset class="aem-settings">
+            <legend>Simulation Settings</legend>
+            <p class="aem-settings-hint">Type a value, press Enter to apply</p>
+            <h4 class="aem-settings-group">Model parameters</h4>
+            <div class="aem-field-grid">
+              <label>Long. dispersivity &alpha;<sub>L</sub><span class="param-help" tabindex="0" role="note" aria-label="Longitudinal dispersivity — plume spreading along the flow direction [m].">i<span class="param-help__tip" role="tooltip">Longitudinal dispersivity — plume spreading along the flow direction [m].</span></span><input type="number" name="alpha_l" value="2" step="any" min="0"></label>
+              <label>Trans. dispersivity &alpha;<sub>T</sub><span class="param-help" tabindex="0" role="note" aria-label="Transverse dispersivity — plume spreading across the flow direction [m].">i<span class="param-help__tip" role="tooltip">Transverse dispersivity — plume spreading across the flow direction [m].</span></span><input type="number" name="alpha_t" value="0.2" step="any" min="0"></label>
+              <label>Acceptor Concentration <i>C</i><sub>A</sub> [mg/L]<span class="param-help" tabindex="0" role="note" aria-label="Background acceptor concentration [mg/L].">i<span class="param-help__tip" role="tooltip">Background acceptor concentration [mg/L].</span></span><input type="number" name="ca" value="8" step="any"></label>
+              <label>Stoichiometry Ratio &gamma; [-]<span class="param-help" tabindex="0" role="note" aria-label="Donor : acceptor stoichiometry mass ratio (dimensionless).">i<span class="param-help__tip" role="tooltip">Donor : acceptor stoichiometry mass ratio (dimensionless).</span></span><input type="number" name="gamma" value="3.5" step="any" min="0"></label>
+              <label>Source zone extent<span class="param-help" tabindex="0" role="note" aria-label="Source-zone extent [m] — the x-extent shown by the gold lines.">i<span class="param-help__tip" role="tooltip">Source-zone extent [m] — the x-extent shown by the gold lines.</span></span><input type="number" name="ws" value="0.5" step="any" min="0"></label>
+            </div>
+            <button id="aem-orientation" type="button" class="aem-btn">Orientation: vertical</button>
+            <p class="aem-settings-hint">Vertical orientation: every source top edge must be at least 0.1 m below the water table (y = 0).</p>
+            <h4 class="aem-settings-group">Computational parameters</h4>
+            <div class="aem-field-grid">
+              <label>Resolution &Delta;<span class="param-help" tabindex="0" role="note" aria-label="Output grid resolution [m]. Smaller = finer field but slower solve.">i<span class="param-help__tip" role="tooltip">Output grid resolution [m]. Smaller = finer field but slower solve.</span></span><input type="number" name="dom_inc" value="1" step="any" min="0"></label>
+              <label>Min circle radius<span class="param-help" tabindex="0" role="note" aria-label="Smallest circle radius [m] used when filling a polygon. Smaller packs finer detail but takes longer.">i<span class="param-help__tip" role="tooltip">Smallest circle radius [m] used when filling a polygon. Smaller packs finer detail but takes longer.</span></span><input type="number" name="min_radius" value="0.003" step="any" min="0.0001"></label>
+              <label>Control points<span class="param-help" tabindex="0" role="note" aria-label="Boundary control points per element used to fit the solution.">i<span class="param-help__tip" role="tooltip">Boundary control points per element used to fit the solution.</span></span><input type="number" name="num_cp" value="40" step="1" min="1"></label>
+              <label>Expansion terms<span class="param-help" tabindex="0" role="note" aria-label="Number of Mathieu expansion terms (higher = more accurate, slower).">i<span class="param-help__tip" role="tooltip">Number of Mathieu expansion terms (higher = more accurate, slower).</span></span><input type="number" name="num_terms" value="5" step="1" min="1"></label>
+              <label>Plot aspect<span class="param-help" tabindex="0" role="note" aria-label="Result aspect: 'scaled' for equal x/y axes, blank for auto.">i<span class="param-help__tip" role="tooltip">Result aspect: 'scaled' for equal x/y axes, blank for auto.</span></span><input type="text" name="plot_aspect" value="" placeholder="(auto)"></label>
+            </div>
+            <div id="aem-settings-msg" class="aem-settings-msg" aria-live="polite"></div>
+          </fieldset>
+          <div class="aem-designer-buttons aem-tool-palette">
+            <button id="aem-tool-polygon" type="button" class="aem-btn aem-btn--active">Polygon (1)</button>
+            <button id="aem-tool-circle" type="button" class="aem-btn">Circle (2)</button>
+            <button id="aem-tool-ellipse" type="button" class="aem-btn">Ellipse (3)</button>
+            <button id="aem-tool-line" type="button" class="aem-btn">Line (4)</button>
+            <button id="aem-tool-select" type="button" class="aem-btn">Select (5)</button>
+          </div>
+          <button id="aem-pack" type="button" class="aem-btn aem-btn--pack">Close &amp; Pack polygon</button>
+          <div class="aem-designer-buttons">
+            <button id="aem-index" type="button" class="aem-btn">Index # (i)</button>
+            <button id="aem-export" type="button" class="aem-btn aem-btn--export">Export (s)</button>
+            <button id="aem-clear" type="button" class="aem-btn aem-btn--clear">Clear all</button>
+          </div>
+          <div class="aem-designer-buttons">
+            <button id="aem-import-trigger" type="button" class="aem-btn">Import JSON</button>
+            <input id="aem-import" class="aem-file-input" type="file" accept="application/json,.json" aria-label="Import AEM JSON">
+          </div>
+          <button type="submit" class="aem-btn aem-btn--submit">Run Simulation</button>
+        </form>
+      </aside>
+      <main class="aem-designer-stage">
+        <canvas id="aem-designer-canvas" aria-label="Interactive AEM source geometry designer"></canvas>
+        <div class="aem-designer-panel">
+          <canvas id="aem-colorbar" class="aem-colorbar" aria-label="Electron donor concentration colorbar"></canvas>
+          <div id="aem-info" class="aem-info" aria-live="polite"></div>
+          <label class="aem-conc-edit" hidden>Concentration C<sub>D</sub><sup>0</sup> [mg/L]
+            <input id="aem-conc-input" type="number" step="0.01" min="0.1" inputmode="decimal">
+          </label>
+          <div id="aem-status" class="aem-status" aria-live="polite"></div>
+        </div>
+      </main>
+    </div>
+  </div>
+  <script src="{{ url_for('static', filename='aem.js') }}?v=20260803c"></script>
+{% endblock %}

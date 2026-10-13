@@ -1,0 +1,462 @@
+import logging
+import smtplib
+from email.message import EmailMessage
+import os
+import secrets
+from urllib.parse import urlparse
+
+from bokeh.resources import CDN
+from flask import Flask, abort, render_template, jsonify, redirect, request, url_for
+from werkzeug.exceptions import HTTPException
+from flask_login import (
+    LoginManager,
+    UserMixin,
+    current_user,
+    login_required,
+    login_user as flask_login_user,
+    logout_user,
+)
+from mysql.connector import Error, IntegrityError
+from werkzeug.security import generate_password_hash, check_password_hash
+
+from aem_routes import aem_bp
+from analytical_routes import analytical_bp
+from data_queries import get_db_connection
+from empirical_routes import empirical_bp
+from numerical_routes import numerical_bp
+from security import (
+    GENERIC_DATABASE_ERROR_MESSAGE,
+    MAX_PASSWORD_LENGTH,
+    MAX_USERNAME_LENGTH,
+    csrf_protect,
+    csrf_token,
+    current_email,
+    is_valid_email,
+    json_object_or_400,
+    password_policy_error,
+    rate_limit,
+    required_text_fields,
+)
+from settings import (
+    DEMO_USER_EMAIL,
+    CONTACT_EMAIL,
+    CONTACT_FROM_EMAIL,
+    CONTACT_MAX_MESSAGE_LENGTH,
+    SMTP_HOST,
+    SMTP_PASSWORD,
+    SMTP_PORT,
+    SMTP_USERNAME,
+    SMTP_USE_TLS,
+    FLASK_DEBUG,
+    FLASK_HOST,
+    FLASK_PORT,
+    MAX_REQUEST_BYTES,
+    PANEL_ALLOW_ORIGINS,
+    PANEL_PUBLIC_BASE,
+    SECRET_KEY,
+    SESSION_COOKIE_SECURE,
+    SITE_ENV_LABEL,
+)
+from site_routes import site_bp
+
+# Same format as panel_server.py; without this, module loggers fall back to the
+# bare stderr handler and INFO-level lines are silently dropped under gunicorn.
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s | %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+def _warn_about_panel_embedding() -> None:
+    """Say at startup when the Panel iframes will not be able to size themselves.
+
+    The pages embed Panel in an iframe and the parent grows that iframe to fit,
+    which it can only do same-origin. An absolute PANEL_PUBLIC_BASE makes every
+    embed cross-origin (a different port is a different origin), the height sync
+    silently gives up, and the plot is cut off at its CSS floor. The matching
+    trap is PANEL_ALLOW_ORIGINS: a host that is not listed has its websocket
+    rejected, so the plot never finishes rendering on that device.
+    """
+    parsed = urlparse(PANEL_PUBLIC_BASE)
+    if parsed.scheme or parsed.netloc:
+        logger.warning(
+            "PANEL_PUBLIC_BASE=%s is absolute, so the Panel iframes are cross-origin "
+            "unless the site is served from exactly that origin. The iframe height "
+            "sync cannot run cross-origin and embedded plots will be cut off. Prefer "
+            "a same-origin path such as /panel.",
+            PANEL_PUBLIC_BASE,
+        )
+    else:
+        logger.info("PANEL_PUBLIC_BASE=%s (same-origin embed)", PANEL_PUBLIC_BASE or "/")
+    logger.info(
+        "PANEL_ALLOW_ORIGINS=%s - a browser reaching this site by any other host "
+        "(a LAN IP, for example) will have its Panel websocket rejected.",
+        ",".join(PANEL_ALLOW_ORIGINS) or "(empty)",
+    )
+
+
+_warn_about_panel_embedding()
+
+app = Flask(__name__)
+app.secret_key = SECRET_KEY
+
+
+@app.template_global()
+def asset_v(filename):
+    """Cache-buster for a static file, taken from the file's own mtime.
+
+    base.html used to carry a hardcoded "?v=20260831a", which only busts the
+    cache when someone remembers to bump it - and an edited stylesheet that
+    nobody bumped is simply never served to anyone who has visited before.
+    """
+    try:
+        return str(int(os.path.getmtime(os.path.join(app.static_folder, filename))))
+    except OSError:
+        return "0"
+
+# Cookie hardening for the login session and "remember me" cookie.
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,      # not readable by JavaScript (mitigates XSS theft)
+    SESSION_COOKIE_SECURE=SESSION_COOKIE_SECURE,  # HTTPS-only (configurable for dev)
+    SESSION_COOKIE_SAMESITE="Lax",     # blocks cross-site cookie sending (CSRF defense in depth)
+    REMEMBER_COOKIE_HTTPONLY=True,
+    REMEMBER_COOKIE_SECURE=SESSION_COOKIE_SECURE,
+    REMEMBER_COOKIE_SAMESITE="Lax",
+    MAX_CONTENT_LENGTH=MAX_REQUEST_BYTES,  # reject oversized request bodies
+)
+app.jinja_env.globals["csrf_token"] = csrf_token
+app.jinja_env.globals["contact_email"] = CONTACT_EMAIL
+app.jinja_env.globals["site_env_label"] = SITE_ENV_LABEL
+app.jinja_env.globals["bokeh_js_files"] = [
+    f"/{js_file}" if js_file.startswith("static/extensions/panel/") else js_file
+    for js_file in CDN.js_files
+]
+
+login_manager = LoginManager(app)
+login_manager.login_view = "login_page"
+
+# Precomputed hash of a random password, used to equalize login response timing
+# for non-existent accounts (prevents user-enumeration via timing).
+_DUMMY_PASSWORD_HASH = generate_password_hash(secrets.token_urlsafe(32))
+
+
+class User(UserMixin):
+    def __init__(self, id, username, email):
+        self.id = id
+        self.username = username
+        self.email = email
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT id, username, email FROM users WHERE id = %s", (user_id,))
+        row = cursor.fetchone()
+    finally:
+        cursor.close()
+        conn.close()
+    if row:
+        return User(row["id"], row["username"], row["email"])
+    return None
+
+app.config['DB_CONNECTION'] = get_db_connection
+
+app.register_blueprint(site_bp)
+app.register_blueprint(analytical_bp)
+app.register_blueprint(empirical_bp)
+app.register_blueprint(numerical_bp)
+app.register_blueprint(aem_bp)
+
+
+@app.errorhandler(HTTPException)
+def handle_http_error(error):
+    # JSON clients (login/register/report fetches) should get a JSON error
+    # body they can parse, not Werkzeug's HTML error page.
+    if request.is_json:
+        return jsonify({"success": False, "message": error.description}), error.code
+    return error
+
+
+@app.errorhandler(Error)
+def handle_database_error(error):
+    logger.error(
+        "Unhandled database error",
+        exc_info=(type(error), error, error.__traceback__),
+    )
+    return jsonify({"success": False, "message": GENERIC_DATABASE_ERROR_MESSAGE}), 503
+
+
+@app.route("/")
+def home():
+    return render_template("index.html")
+
+
+
+
+def _smtp_configured():
+    return bool(SMTP_HOST and CONTACT_EMAIL and CONTACT_EMAIL != "demo@example.com")
+
+
+def _send_contact_email(name, email, message):
+    subject_name = " ".join(name.split())
+    msg = EmailMessage()
+    msg["Subject"] = f"PACS contact request from {subject_name}"
+    msg["From"] = CONTACT_FROM_EMAIL
+    msg["To"] = CONTACT_EMAIL
+    msg["Reply-To"] = email
+    msg.set_content(
+        f"Name: {name}\n"
+        f"Email: {email}\n\n"
+        f"Message:\n{message}\n"
+    )
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
+        if SMTP_USE_TLS:
+            smtp.starttls()
+        if SMTP_USERNAME or SMTP_PASSWORD:
+            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+        smtp.send_message(msg)
+
+@app.route("/health")
+def health():
+    # Liveness + DB reachability, for Docker healthchecks and uptime monitors.
+    # A DB outage raises mysql Error -> handle_database_error -> 503.
+    get_db_connection().close()
+    return ("", 204)
+
+
+
+# Per-model "About" pages (description + governing equation). Public, like the
+# old PACS documentation pages -- no login required.
+MODEL_ABOUT_TEMPLATES = {
+    "liedl": "about_liedl.html",
+    "liedl3d": "about_liedl3d.html",
+    "chu": "about_chu.html",
+    "ham": "about_ham.html",
+    "bioscreen": "about_bioscreen.html",
+    "cirpka": "about_cirpka.html",
+    "maier": "about_maier.html",
+    "birla": "about_birla.html",
+    "kohler": "about_kohler.html",
+    "numerical": "about_numerical.html",
+}
+
+
+@app.route("/models/<slug>/about")
+def model_about(slug):
+    template = MODEL_ABOUT_TEMPLATES.get(slug)
+    if template is None:
+        abort(404)
+    return render_template(template)
+
+
+
+@app.route("/contact", methods=["POST"])
+@rate_limit(limit=5, window_seconds=300)
+@csrf_protect
+def contact():
+    data = json_object_or_400()
+    name, email, message = required_text_fields(data, "name", "email", "message")
+
+    if len(name) > MAX_USERNAME_LENGTH:
+        return jsonify({"success": False, "message": "Name is too long."}), 400
+    if not is_valid_email(email):
+        return jsonify({"success": False, "message": "Please enter a valid email address."}), 400
+    if len(message) > CONTACT_MAX_MESSAGE_LENGTH:
+        return jsonify({"success": False, "message": "Message is too long."}), 400
+
+    if not _smtp_configured():
+        logger.info(
+            "Contact form submission received while email delivery is not configured: name=%r email=%r message=%r",
+            name,
+            email,
+            message,
+        )
+        return jsonify(
+            {
+                "success": True,
+                "message": "Thanks. Your message has been received.",
+            }
+        )
+
+    try:
+        _send_contact_email(name, email, message)
+    except Exception:
+        logger.exception("Unable to send contact form email")
+        return jsonify(
+            {
+                "success": False,
+                "message": "Message could not be sent. Please try again later.",
+            }
+        ), 503
+
+    return jsonify({"success": True, "message": "Thanks. Your message has been sent."})
+
+@app.route("/login", methods=["GET"])
+def login_page():
+    return render_template("login.html")
+
+
+@app.route("/login", methods=["POST"])
+@rate_limit(limit=5, window_seconds=60)
+@csrf_protect
+def authenticate():
+    data = json_object_or_400()
+    email, password = required_text_fields(data, "username", "password")
+
+    # No stored password exceeds the registration cap, so reject oversized
+    # input before hashing (a multi-MB password is a cheap CPU DoS otherwise).
+    if len(password) > MAX_PASSWORD_LENGTH:
+        return jsonify({"success": False, "message": "Invalid email or password."}), 401
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
+        user = cursor.fetchone()
+    except Error:
+        logger.exception("Database error while authenticating account")
+        return jsonify(
+            {
+                "success": False,
+                "message": "Unable to log in right now. Please try again later.",
+            }
+        ), 503
+    finally:
+        if cursor is not None:
+            cursor.close()
+        if conn is not None:
+            conn.close()
+
+    if user:
+        password_ok = check_password_hash(user["password_hash"], password)
+    else:
+        # Run a hash comparison even when the account does not exist so the
+        # response time does not reveal whether an email is registered.
+        check_password_hash(_DUMMY_PASSWORD_HASH, password)
+        password_ok = False
+
+    if user and password_ok:
+        authenticated_user = load_user(user["id"])
+        if authenticated_user is None:
+            return jsonify({"success": False, "message": "Invalid email or password."}), 401
+        flask_login_user(authenticated_user)
+        return jsonify({"success": True, "redirect": url_for("home")})
+    return jsonify({"success": False, "message": "Invalid email or password."}), 401
+
+
+@app.route("/register", methods=["GET"])
+def register_page():
+    return render_template("register.html")
+
+
+@app.route("/auth/check")
+def auth_check():
+    # The reverse proxy copies this header into the upstream Panel request as the
+    # trusted X-Auth-Email, so Panel never has to trust a client-supplied identity.
+    #
+    # Guests are allowed through: the model pages are public, and their embedded
+    # Panel apps would otherwise be redirected to /login. They are identified by
+    # their per-session guest id, so one visitor's runs never reach another's.
+    return ("", 204, {"X-User-Email": current_email()})
+
+
+@app.route("/me")
+def me():
+    # JSON twin of /auth/check for the frontend: 401 + JSON (not a redirect)
+    # so fetch() callers can branch on authentication state.
+    if not current_user.is_authenticated:
+        return jsonify({"authenticated": False}), 401
+    return jsonify(
+        {
+            "authenticated": True,
+            "id": current_user.id,
+            "username": current_user.username,
+            "email": current_user.email,
+        }
+    )
+
+
+@app.route("/register", methods=["POST"])
+@rate_limit(limit=3, window_seconds=60)
+@csrf_protect
+def register_user():
+    data = json_object_or_400()
+    username, email, password, confirm_password = required_text_fields(
+        data,
+        "username",
+        "email",
+        "password",
+        "confirmPassword",
+    )
+
+    if password != confirm_password:
+        return jsonify({"success": False, "message": "Passwords do not match."}), 400
+
+    if not is_valid_email(email):
+        return jsonify({"success": False, "message": "Please enter a valid email address."}), 400
+
+    if len(username) > MAX_USERNAME_LENGTH:
+        return jsonify(
+            {"success": False, "message": f"Username must be at most {MAX_USERNAME_LENGTH} characters."}
+        ), 400
+
+    policy_error = password_policy_error(password)
+    if policy_error:
+        return jsonify({"success": False, "message": policy_error}), 400
+
+    conn = None
+    cursor = None
+    hashed_pw = generate_password_hash(password)
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO users (username, email, password_hash, country, organisation)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (username, email, hashed_pw, None, None),
+        )
+        conn.commit()
+    except IntegrityError:
+        # Unique constraint on users.email: surface a clear conflict instead
+        # of a generic server error.
+        return jsonify(
+            {
+                "success": False,
+                "message": "An account with this email already exists.",
+            }
+        ), 409
+    except Error:
+        logger.exception("Database error while registering account")
+        return jsonify(
+            {
+                "success": False,
+                "message": "Unable to create account. Please try again later.",
+            }
+        ), 503
+    finally:
+        if cursor is not None:
+            cursor.close()
+        if conn is not None:
+            conn.close()
+
+    return jsonify({"success": True, "redirect": url_for("login_page")})
+
+
+@app.route("/logout", methods=["POST"])
+@login_required
+@csrf_protect
+def logout():
+    logout_user()
+    return redirect(url_for("home"))
+
+
+if __name__ == "__main__":
+    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=FLASK_DEBUG)

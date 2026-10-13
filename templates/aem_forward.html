@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}AEM Forward Simulation{% endblock %}
+{% block content %}
+<section class="section-spaced model-page aem-native" data-aem-page="forward" data-design-token="{{ design_token }}" data-csrf="{{ csrf_token() }}">
+  <h2>AEM Forward Simulation</h2>
+  <p class="small">The validated source design is running through the existing AEM solver.</p>
+  <div id="aem-message" class="aem-message" role="status" aria-live="polite">Submitting simulation...</div>
+  <div class="card-like aem-result-card">
+    <div class="aem-result-toolbar">
+      <div id="aem-cancel-actions" class="model-input-actions" hidden><button id="aem-cancel" type="button" class="primary-btn" hidden>Cancel job</button></div>
+      <div id="aem-result-actions" class="model-input-actions aem-result-actions" hidden>
+        <a id="aem-download-csv" class="primary-btn" href="#" download>Download results CSV</a>
+        <a id="aem-open-workbench" class="primary-btn" href="#">Explore in Data Workbench</a>
+      </div>
+    </div>
+    <div class="aem-result-layout">
+      <canvas id="aem-result-canvas" width="1000" height="560" aria-label="AEM concentration field"></canvas>
+      <dl id="aem-summary" class="aem-summary"></dl>
+    </div>
+  </div>
+</section>
+<script src="{{ url_for('static', filename='aem.js') }}?v=20260803c"></script>
+{% endblock %}

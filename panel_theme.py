@@ -1,0 +1,353 @@
+"""Central PACS theme for all Panel apps.
+
+Call apply_theme() once (in panel_server.py) before serving. It injects
+document-level CSS and sets class-level default stylesheets so every
+Button, input, Tabulator etc. in every app matches the site redesign,
+without editing the individual panel_*.py files.
+
+Design tokens mirror static/styles.css:
+  bg #f5f7fa | panel #eef1f5 | border #e3e8ef | text #16212e
+  muted #5b6b7f | accent #1f72cd / #155da9 / #114b88 | navy #0b2c4f
+"""
+
+import html as _html
+import json as _json
+
+import panel as pn
+
+FONT_FAMILY = "Inter, 'Source Sans 3', system-ui, 'Segoe UI', Roboto, Arial, sans-serif"
+
+# Document-level (light DOM): fonts + page base
+GLOBAL_CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+/* Panel documents are separate cross-origin frames, so static/styles.css never
+   reaches them - without this the shell scales on a large display and every
+   panel inside it stays put, reading as progressively smaller. Same curve as the
+   shell, but vw here is the FRAME's width, not the window's, so a panel scales
+   with the room it actually has. Clamped flat at small sizes: a phone frame is
+   ~350px wide and must keep today's metrics exactly. */
+html { font-size: clamp(1rem, 0.53vw + 0.567rem, 1.25rem); }
+html, body {
+  font-family: Inter, 'Source Sans 3', system-ui, 'Segoe UI', Roboto, Arial, sans-serif;
+  background: #f5f7fa;
+  color: #16212e;
+}
+"""
+
+# Buttons (Button + FileDownload render .bk-btn inside their shadow root).
+#
+# !important on the colours, not tighter selectors: Panel's own design sheet
+# paints buttons through `:host(.solid) .bk-btn.bk-btn-default` (specificity
+# 0,4,0), which outranks anything written as `.bk-btn-default` - every button
+# here was silently wearing Bokeh's stock grey and #0072b5 instead of the PACS
+# palette. The winning selector is a Panel internal that has changed shape
+# between releases; !important survives the next rename.
+BUTTON_CSS = """
+:host { font-family: %(font)s; }
+.bk-btn {
+  border-radius: 8px;
+  font-family: %(font)s;
+  font-weight: 600;
+  font-size: 14px;
+  padding: 9px 16px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.bk-btn-primary {
+  background: #155da9 !important;
+  border: 1px solid #155da9 !important;
+  color: #fff !important;
+}
+.bk-btn-primary:hover {
+  background: #114b88 !important;
+  border-color: #114b88 !important;
+}
+.bk-btn-default {
+  background: #eef1f5 !important;
+  border: 1px solid #e3e8ef !important;
+  color: #16212e !important;
+}
+.bk-btn-default:hover {
+  border-color: #5598e3 !important;
+  color: #114b88 !important;
+}
+/* FileDownload (Download Sample File, CSV, Excel, PDF) puts its label in an <a>
+   inside the button, and Panel's design sheet zeroes the button's own padding
+   and gives the anchor 6px instead - 31px tall against a plain Button's 40px.
+   Match the metrics on the anchor so a toolbar of both lines up. */
+.bk-btn > a {
+  padding: 9px 16px;
+  line-height: 20px;
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+""" % {"font": FONT_FAMILY}
+
+# Text/number inputs, selects, sliders
+INPUT_CSS = """
+:host { font-family: %(font)s; }
+label {
+  font-family: %(font)s;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  color: #5b6b7f;
+}
+.bk-input {
+  font-family: %(font)s;
+  background: #f8fafc;
+  color: #16212e;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  padding: 6px 10px;
+  min-height: 34px;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.bk-input:focus {
+  border-color: #5598e3;
+  box-shadow: 0 0 0 3px rgba(31, 114, 205, 0.12);
+  outline: none;
+}
+""" % {"font": FONT_FAMILY}
+
+# Sliders. Bokeh builds these on noUiSlider, so INPUT_CSS (.bk-input) never
+# reaches them - they kept the stock grey bar. A 4px track with the PACS accent
+# on the travelled portion reads as an instrument next to the plot rather than
+# as one more form control.
+SLIDER_CSS = """
+:host { font-family: %(font)s; }
+.bk-slider-title {
+  font-family: %(font)s;
+  font-weight: 600;
+  font-size: 0.78125rem;
+  color: #5b6b7f;
+  margin-bottom: 2px;
+  /* PACS parameter names are long ("Horizontal Transverse Dispersivity a_Th
+     [m]"). Bokeh keeps the title on one line, so side-by-side sliders bleed
+     into each other; wrap instead. */
+  white-space: normal;
+  line-height: 1.35;
+}
+.bk-slider-value, .bk-slider-title .bk-slider-value {
+  font-weight: 700;
+  color: #0b2c4f;
+}
+.noUi-target {
+  /* 6px on a slightly darker rail: at 4px on #eef1f5 the track was barely
+     there, and the filled portion had nothing to read against. */
+  background: #d3dbe6;
+  border: 0;
+  border-radius: 999px;
+  box-shadow: none;
+  height: 6px;
+  margin: 10px 8px 14px;
+  position: relative;
+}
+/* The value the model was last RUN with. explore_sliders sets the two custom
+   properties; with none set the notch is simply invisible, so a slider built
+   anywhere else is unaffected. */
+.noUi-target::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  left: var(--pacs-baseline, 0%%);
+  width: 2px;
+  height: 12px;
+  border-radius: 1px;
+  background: #8a99ab;
+  opacity: var(--pacs-baseline-on, 0);
+  transform: translateX(-1px);
+  pointer-events: none;
+}
+/* Left-to-right gradient: how far along its range the value sits is readable
+   from the fill itself, not just from the handle position. */
+.noUi-connect {
+  background: linear-gradient(90deg, #5598e3 0%%, #155da9 100%%);
+}
+.noUi-handle {
+  width: 16px;
+  height: 16px;
+  right: -8px;
+  top: -5px;
+  border: 2px solid #fff;
+  border-radius: 50%%;
+  background: #155da9;
+  box-shadow: 0 1px 3px rgba(11, 44, 79, 0.35);
+  cursor: grab;
+  transition: background .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+.noUi-handle:hover {
+  background: #114b88;
+  transform: scale(1.15);
+}
+/* Three sliders sit side by side, so the one being dragged says so: brighter
+   fill and a wider halo, held until the pointer is released. */
+.noUi-handle:active {
+  cursor: grabbing;
+  background: #2f8ae0;
+  transform: scale(1.2);
+  box-shadow: 0 0 0 6px rgba(47, 138, 224, 0.22), 0 1px 3px rgba(11, 44, 79, 0.35);
+}
+.noUi-handle::before, .noUi-handle::after { display: none; }
+.noUi-handle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(31, 114, 205, 0.28);
+}
+@media (prefers-reduced-motion: reduce) {
+  .noUi-handle { transition: none; }
+  .noUi-handle:hover, .noUi-handle:active { transform: none; }
+}
+""" % {"font": FONT_FAMILY}
+
+# Tabulator scenario tables
+TABULATOR_CSS = """
+:host { font-family: %(font)s; }
+.tabulator {
+  font-family: %(font)s;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  background: #eef1f5;
+}
+.tabulator .tabulator-header {
+  background: #e7ebf1;
+  border-bottom: 1px solid #e3e8ef;
+}
+.tabulator .tabulator-header .tabulator-col {
+  background: #e7ebf1;
+  border-right: 1px solid #e3e8ef;
+}
+.tabulator .tabulator-header .tabulator-col-title {
+  font-weight: 600;
+  font-size: 0.78125rem;
+  color: #5b6b7f;
+}
+.tabulator-row {
+  border-bottom: 1px solid #eef1f5;
+  color: #16212e;
+}
+.tabulator-row.tabulator-row-even { background: #e9edf3; }
+.tabulator-row:hover { background: #e1ebfa; }
+.tabulator .tabulator-cell { border-right: 1px solid #f1f4f8; }
+""" % {"font": FONT_FAMILY}
+
+# Markdown headings ("## Model name", "### Manual scenario inputs")
+MARKDOWN_CSS = """
+:host { font-family: %(font)s; color: #16212e; }
+h1, h2, h3, h4 { font-family: %(font)s; letter-spacing: -0.01em; }
+h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #16212e;
+  margin: 0 0 4px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #1f72cd;
+  display: inline-block;
+}
+h3 {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5b6b7f;
+  margin: 10px 0 4px;
+}
+""" % {"font": FONT_FAMILY}
+
+
+# One sheet for every component, not one per class.
+#
+# `stylesheets` is a single param.Parameter owned by panel.viewable.Layoutable
+# and shared down the whole hierarchy, so `SomeWidget.param.stylesheets.default
+# = [...]` does not scope to that widget - it reassigns the default for every
+# Layoutable. Setting it per class therefore just let each assignment overwrite
+# the previous one, and only the last (Markdown) survived. The blocks above are
+# already scoped by component-internal selectors (.bk-btn, .bk-input, .noUi-*,
+# .tabulator), so concatenating them is safe: a component matches its own rules
+# and ignores the rest.
+COMPONENT_CSS = "\n".join([BUTTON_CSS, INPUT_CSS, SLIDER_CSS, TABULATOR_CSS, MARKDOWN_CSS])
+
+
+def apply_theme() -> None:
+    """Inject PACS styling into every Panel app served by this process."""
+    if GLOBAL_CSS not in pn.config.raw_css:
+        pn.config.raw_css.append(GLOBAL_CSS)
+
+    pn.viewable.Layoutable.param.stylesheets.default = [COMPONENT_CSS]
+
+
+def report_bridge_html(title="", subtitle="", filename="", parameters=None,
+                       outputs=None, plot_data=None, plot_images_b64=None,
+                       clear=False) -> str:
+    """HTML snippet that posts the latest run results to the parent page.
+
+    Set it as the .object of a hidden pn.pane.HTML after each run. The parent
+    page (script.js) listens for the message and enables the styled
+    "Report Export" card outside the iframe. Use clear=True after a failed
+    run so the stale report is hidden.
+    """
+    if clear:
+        payload = {"type": "pacs-report", "clear": True}
+    else:
+        payload = {
+            "type": "pacs-report",
+            "title": title,
+            "subtitle": subtitle,
+            "filename": filename,
+            "state": {
+                "parameters": parameters or [],
+                "outputs": outputs or [],
+                "plot_data": plot_data,
+                "plot_images": plot_images_b64 or [],
+            },
+        }
+    encoded = _html.escape(_json.dumps(payload), quote=True)
+    # data: URI fails to decode as an image -> onerror fires on insertion,
+    # with no network request. Re-setting the pane creates a fresh <img>,
+    # so the message is re-posted on every run.
+    return (
+        '<img src="data:," style="display:none" alt="" '
+        f'data-payload="{encoded}" '
+        "onerror='window.parent.postMessage(JSON.parse(this.dataset.payload), \"*\")'>"
+    )
+
+
+# Reports this document's height to the page embedding it. The parent can only
+# measure a frame it is allowed to read, which rules out any PANEL_PUBLIC_BASE
+# pointing at another port - and then the frame is stuck at its CSS floor: a
+# generous floor pads the page with blank space, a tight one cuts the graph off.
+# A posted height is right either way, and it tracks the document as Bokeh
+# renders into it. Set as the .object of a hidden pane, once per app.
+_FRAME_HEIGHT_BRIDGE = (
+    '<img src="data:," style="display:none" alt="" onerror=\''
+    "(function(){"
+    "if (window.__castHeightBridge) return;"
+    "window.__castHeightBridge = true;"
+    # The parent frame carries the whole document height, so an inner
+    # scrollbar would only be a second one.
+    "document.documentElement.style.overflowY = \"hidden\";"
+    # Panel pins the body to the viewport height, so a growing document
+    # OVERFLOWS the body box instead of enlarging it - and a ResizeObserver
+    # watching the body then never fires when a graph is drawn. Letting the body
+    # size to its content is what makes the observer below work at all;
+    # without it the only heights ever posted came from the retry timers, and a
+    # run started after the last one left the frame short and the graph cut off.
+    "document.body.style.height = \"auto\";"
+    "var post = function(){"
+    "var h = Math.ceil(Math.max(document.body.scrollHeight,"
+    "document.documentElement.scrollHeight));"
+    "if (h && h !== window.__castHeightLast) {"
+    "window.__castHeightLast = h;"
+    "window.parent.postMessage({type: \"pacs-frame-height\", height: h}, \"*\");}};"
+    "post();"
+    "if (\"ResizeObserver\" in window) new ResizeObserver(post).observe(document.body);"
+    "window.addEventListener(\"load\", post);"
+    # Bokeh renders after load; these catch what the observer misses.
+    "[200, 800, 2000, 4000, 8000].forEach(function(ms){setTimeout(post, ms);});"
+    "})()'>"
+)
+
+
+def frame_height_bridge_html() -> str:
+    """Hidden pane that keeps the embedding page's iframe the height of this
+    document, cross-origin included."""
+    return _FRAME_HEIGHT_BRIDGE

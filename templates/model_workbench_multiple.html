@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{# Workbench shell for every multiple page - the eight analytical / empirical
+   scenario models and both numerical orientations. The Panel iframe holds the
+   site picker, the graph, the toolbar and the scenario table, so the page
+   itself carries only the header, the frame and the report bridge card. #}
+
+{% block title %}{{ self.model_title() }}{% endblock %}
+
+{% block content %}
+<section class="section-spaced model-page model-workbench">
+  <header class="model-workbench-header">
+    <div class="section-head">
+      <span class="kicker">{% block model_kicker %}Toolbox{% endblock %}</span>
+      <h2>{% block model_title %}Model{% endblock %}</h2>
+      <p class="model-workbench-hint">{% block model_hint %}Pick the sites to compare against on the left of the panel, then build the scenario table underneath &mdash; upload a CSV, or add rows with <strong>+</strong> and type your parameters into them. Press Update Graph and one run plots every modelled row together with every picked site's measured plume length. Picked sites supply a measurement only, not model parameters.{% endblock %}</p>
+    </div>
+    <div class="model-workbench-actions">
+      <a class="ghost-btn model-workbench-back" href="{% block toolbox_href %}{{ url_for('analytical_bp.analytical_landing') }}{% endblock %}">&larr; {% block toolbox_label %}All analytical models{% endblock %}</a>
+      {% block model_about_link %}{% endblock %}
+    </div>
+  </header>
+
+  {# Every multiple page is one full-width frame: the site picker, the graph,
+     the toolbar and the scenario table all live in the Panel document, so there
+     is no sidebar for the page to draw. #}
+  <div class="model-workbench-layout model-workbench-layout--full">
+    <main class="model-workbench-stage model-workbench-stage--multiple">
+      <div class="card-like model-output-card">
+        <h3>Simulation Panel</h3>
+        <div class="panel-shell output-panel-shell">
+          {# data-min-height is the floor script.js will not shrink below. It
+             covers the controls, not a drawn graph: the frame grows to fit its
+             content, and a floor sized for the graph leaves an empty band under
+             the card until one exists. clipboard-write is for the Copy button. #}
+          <iframe src="{{ panel_src }}" class="panel-frame output-panel-frame" scrolling="no"
+                  data-min-height="{{ panel_min_height | default(640) }}"
+                  allow="clipboard-read; clipboard-write"
+                  {% block output_frame_attrs %}{% endblock %} loading="eager"></iframe>
+        </div>
+      </div>
+      {# With no sidebar the report card has nowhere else to go, and it belongs
+         under the run it exports anyway. #}
+      {% include "report_bridge_card.html" %}
+    </main>
+  </div>
+</section>
+
+{# The Add row dialog lives on the page, not in the Panel frame: a dialog built
+   inside the frame can only ever cover the frame, which is a band in the middle
+   of this page. <dialog> puts it over the whole window, with the browser's own
+   backdrop, focus trap and Esc handling. Add row inside the frame asks script.js
+   to open it, and script.js posts the filled-in row back. #}
+{% block stage_bottom %}
+<dialog id="scenarioDialog" class="scenario-dialog" aria-labelledby="scenarioDialogTitle">
+  <form method="dialog" id="scenarioForm">
+    <h3 id="scenarioDialogTitle">Add scenario</h3>
+    <label for="scenario_name">Scenario name</label>
+    <input type="text" id="scenario_name" name="name" value="Manual" autocomplete="off">
+    <div class="scenario-dialog-grid">
+      {% for f in scenario_fields | default([]) %}
+      <div class="scenario-dialog-field">
+        <label for="scenario_{{ f.key }}">{{ f.label }}</label>
+        {# f.text: a free-text parameter (the numerical source geometry). Not
+           required - blank is a real answer there. #}
+        {% if f.text %}
+        <input type="text" id="scenario_{{ f.key }}" name="{{ f.key }}"
+               value="{{ f.value }}" autocomplete="off">
+        {% else %}
+        <input type="number" step="any" id="scenario_{{ f.key }}" name="{{ f.key }}"
+               value="{{ f.value }}" required>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    <label for="scenario_measured">Measured Lmax [m]</label>
+    <input type="number" step="any" id="scenario_measured" name="measured"
+           placeholder="optional - measured plume length">
+    <div class="scenario-dialog-actions">
+      <button type="submit" class="primary-btn" value="add">Add scenario</button>
+      <button type="button" class="ghost-btn" data-scenario-cancel>Cancel</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}
+{% endblock %}

@@ -1,0 +1,70 @@
+{% extends "model_about_base.html" %}
+
+{% block about_category %}Analytical Model{% endblock %}
+{% block about_equation_label %}Solution{% endblock %}
+{% block about_title %}Ham et al. (2004){% endblock %}
+{% block back_href %}{{ url_for('analytical_bp.analytical_landing') }}{% endblock %}
+{% block back_label %}All analytical models{% endblock %}
+
+{% block about_lead %}
+<p>A 2D model that estimates the steady-state plume length
+(<math><msub><mi>L</mi><mi mathvariant="normal">max</mi></msub></math>) and explores the effect of
+transverse horizontal dispersivity on the length of a plume degraded by an instantaneous
+bimolecular reaction at its fringe. In PACS the source is characterised by its
+flux <math><msub><mi>W</mi><mi>e</mi></msub></math>.</p>
+{% endblock %}
+
+{% block about_figure %}
+<figure class="about-figure">
+  <img src="{{ url_for('static', filename='images/conceptual_ham_2004.png') }}"
+       alt="Conceptual 2D model of Ham et al. (2004): a mass-flux source releasing a plume whose steady-state length is controlled by hydrodynamic dispersion.">
+  <figcaption>Conceptual model &mdash; Ham et al. (2004).</figcaption>
+</figure>
+{% endblock %}
+
+{% block about_equation %}
+<math display="block">
+  <mrow>
+    <msub title="Maximum plume length [L]"><mi>L</mi><mi mathvariant="normal">max</mi></msub>
+    <mo>=</mo>
+    <mfrac>
+      <msup><msub><mi title="Source flux [L²T⁻¹]">W</mi><mi>e</mi></msub><mn>2</mn></msup>
+      <mrow><mn>4</mn><mi>π</mi><msub title="Transverse horizontal dispersivity [L]"><mi>α</mi><mrow><mi>T</mi><mi>h</mi></mrow></msub></mrow>
+    </mfrac>
+    <msup>
+      <mrow>
+        <mo>(</mo>
+        <mfrac>
+          <mrow><mi title="Stoichiometry ratio [-]">γ</mi><msubsup title="Donor concentration at source [LT⁻³]"><mi>C</mi><mi>D</mi><mn>0</mn></msubsup></mrow>
+          <msubsup title="Acceptor concentration at source [LT⁻³]"><mi>C</mi><mi>A</mi><mn>0</mn></msubsup>
+        </mfrac>
+        <mo>)</mo>
+      </mrow>
+      <mn>2</mn>
+    </msup>
+  </mrow>
+</math>
+{% endblock %}
+
+{% block about_parameters %}
+<dt><math><msub><mi>W</mi><mi>e</mi></msub></math></dt><dd>Source flux [L²T⁻¹]</dd>
+<dt><math><msub><mi>α</mi><mrow><mi>T</mi><mi>h</mi></mrow></msub></math></dt><dd>Transverse horizontal dispersivity [L]</dd>
+<dt><math><mi>γ</mi></math></dt><dd>Stoichiometry ratio [-]</dd>
+<dt><math><msubsup><mi>C</mi><mi>D</mi><mn>0</mn></msubsup></math></dt><dd>Donor concentration at source [LT⁻³]</dd>
+<dt><math><msubsup><mi>C</mi><mi>A</mi><mn>0</mn></msubsup></math></dt><dd>Acceptor concentration at source [LT⁻³]</dd>
+{% endblock %}
+
+{% block about_assumptions %}
+<li>A point source with constant mass-flow injection.</li>
+<li>An instantaneous reaction between the injected compound and a reactant in the ambient groundwater at the plume fringe.</li>
+{% endblock %}
+
+{% block about_reference %}
+<p>Ham, P. A. S., R. J. Schotting, H. Prommer, and G. B. Davis. 2004. Effects of
+hydrodynamic dispersion on plume lengths for instantaneous bimolecular
+reactions. Advances in Water Resources 27, no. 8: 803&ndash;13,
+<a href="https://doi.org/10.1016/j.advwatres.2004.05.008" target="_blank" rel="noopener noreferrer">https://doi.org/10.1016/j.advwatres.2004.05.008</a>.</p>
+{% endblock %}
+
+{% block run_single_href %}{{ url_for('analytical_bp.ham_single') }}{% endblock %}
+{% block run_multiple_href %}{{ url_for('analytical_bp.ham_multiple') }}{% endblock %}

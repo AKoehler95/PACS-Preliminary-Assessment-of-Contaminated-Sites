@@ -1,0 +1,40 @@
+{% extends "model_workbench_single.html" %}
+{% block title %}Numerical Vertical Model - Single Simulation{% endblock %}
+{% block model_page_class %}numerical-single-page{% endblock %}
+{% block model_kicker %}Numerical Toolbox{% endblock %}
+{% block model_title %}Numerical Vertical Model - Single Simulation{% endblock %}
+{% block toolbox_href %}{{ url_for('numerical_bp.numerical_landing') }}{% endblock %}
+{% block toolbox_label %}All numerical models{% endblock %}
+{% block model_about_link %}<a class="ghost-btn model-workbench-back" href="{{ url_for('numerical_bp.numerical_vertical_multiple') }}">Multiple simulations</a>{% endblock %}
+{% block output_frame_attrs %}data-min-height="560"{% endblock %}
+{% block workbench_top %}
+<div class="card-like conceptual-figure conceptual-figure--banner">
+  <h3>Conceptual Model</h3>
+  <img
+    src="{{ url_for('static', filename='images/conceptual_numerical_vertical.png') }}"
+    alt="Vertical numerical model cross-section showing x-z spreading, aquifer thickness T_A, source thickness, and vertical transverse dispersivity alpha_Tv"
+    class="conceptual-img"
+    loading="eager"
+  />
+  <div class="conceptual-figure__side">
+  {% if analytical_fields is defined %}
+  {# The simulation domain is sized automatically from the analytical model,
+     so it is not a user input — explain the derivation here instead. #}
+  <div class="analytical-derivation">
+    <h4>Domain from the analytical model</h4>
+    {% if analytical_fields %}
+    <dl class="analytical-derivation-values">
+      {% for a in analytical_fields %}
+      <div><dt>{{ a.label }}</dt><dd>{{ '%.2f'|format(a.value) }}</dd></div>
+      {% endfor %}
+    </dl>
+    {% endif %}
+    <p class="small">The simulation domain is sized from the analytical solution, so you never enter it. The maximum plume length is <i>L</i><sub>max</sub> = (4&nbsp;<i>T</i><sub>A</sub>²) / (π²&nbsp;α<sub>Tv</sub>)&nbsp;·&nbsp;ln[(4γ<i>C</i><sub>D</sub>&nbsp;+&nbsp;<i>C</i><sub>A</sub>) / (π&nbsp;<i>C</i><sub>A</sub>)] (vertical Liedl-type solution, using aquifer thickness <i>T</i><sub>A</sub>, vertical transverse dispersivity α<sub>Tv</sub>, donor/acceptor concentrations and γ). <b>Domain Length <i>L</i><sub>D</sub></b> = 1.5&nbsp;·&nbsp;<i>L</i><sub>max</sub> (a 50% downstream margin).</p>
+  </div>
+  {% endif %}
+  <p class="small conceptual-note">Vertical configuration: cross-section (<i>x</i>, <i>z</i>) with aquifer thickness <i>T</i><sub>A</sub>, source thickness <i>T</i><sub>s</sub>, and vertical transverse dispersivity α<sub>Tv</sub>.</p>
+  </div>
+</div>
+{% endblock %}
+{% block report_card %}{% endblock %}
+{% block stage_bottom %}{% include "report_bridge_card.html" %}{% endblock %}

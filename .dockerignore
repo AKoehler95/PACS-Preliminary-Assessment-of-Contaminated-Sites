@@ -1,0 +1,14 @@
+.git
+.gitignore
+.vscode
+**/worktrees
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.log
+.venv
+venv
+.numerical_runs
+tmp*-cwd
+.env

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Analytical Models &bull; PACS{% endblock %}
+{% block content %}
+
+<section class="model-landing">
+  <header class="section-head">
+    <span class="kicker">Toolbox</span>
+    <h2>Analytical Models</h2>
+    <p class="section-sub">Closed-form plume solutions. Pick a model, then run a single scenario or compare multiple scenarios.</p>
+  </header>
+
+  <div class="model-grid">
+    <div class="model-card">
+      <h3>Liedl et al. (2005)</h3>
+      <div class="model-actions">
+        <a class="primary-btn" href="{{ url_for('analytical_bp.liedl_single') }}">Single</a>
+        <a class="ghost-btn" href="{{ url_for('analytical_bp.liedl_multiple') }}">Multiple</a>
+        <a class="ghost-btn" href="{{ url_for('model_about', slug='liedl') }}">About</a>
+      </div>
+    </div>
+
+    <div class="model-card">
+      <h3>Cirpka et al. (2006)</h3>
+      <div class="model-actions">
+        <a class="primary-btn" href="{{ url_for('analytical_bp.cirpka_single') }}">Single</a>
+        <a class="ghost-btn" href="{{ url_for('analytical_bp.cirpka_multiple') }}">Multiple</a>
+        <a class="ghost-btn" href="{{ url_for('model_about', slug='cirpka') }}">About</a>
+      </div>
+    </div>
+
+    <div class="model-card">
+      <h3>Chu et al. (2005)</h3>
+      <div class="model-actions">
+        <a class="primary-btn" href="{{ url_for('analytical_bp.chu_single') }}">Single</a>
+        <a class="ghost-btn" href="{{ url_for('analytical_bp.chu_multiple') }}">Multiple</a>
+        <a class="ghost-btn" href="{{ url_for('model_about', slug='chu') }}">About</a>
+      </div>
+    </div>
+
+    <div class="model-card">
+      <h3>Ham et al. (2004)</h3>
+      <div class="model-actions">
+        <a class="primary-btn" href="{{ url_for('analytical_bp.ham_single') }}">Single</a>
+        <a class="ghost-btn" href="{{ url_for('analytical_bp.ham_multiple') }}">Multiple</a>
+        <a class="ghost-btn" href="{{ url_for('model_about', slug='ham') }}">About</a>
+      </div>
+    </div>
+
+    <div class="model-card">
+      <h3>Liedl 3D (2011)</h3>
+      <div class="model-actions">
+        <a class="primary-btn" href="{{ url_for('analytical_bp.liedl3d_single') }}">Single</a>
+        <a class="ghost-btn" href="{{ url_for('analytical_bp.liedl3d_multiple') }}">Multiple</a>
+        <a class="ghost-btn" href="{{ url_for('model_about', slug='liedl3d') }}">About</a>
+      </div>
+    </div>
+
+    <div class="model-card">
+      <h3>BIOSCREEN-AT 3D</h3>
+      <div class="model-actions">
+        <a class="primary-btn" href="{{ url_for('analytical_bp.bioscreen_single') }}">Single</a>
+        <a class="ghost-btn" href="{{ url_for('analytical_bp.bioscreen_multiple') }}">Multiple</a>
+        <a class="ghost-btn" href="{{ url_for('model_about', slug='bioscreen') }}">About</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+{% endblock %}

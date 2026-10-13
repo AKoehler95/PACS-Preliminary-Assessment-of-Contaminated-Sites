@@ -1,0 +1,8 @@
+{% extends "model_workbench_multiple.html" %}
+{% block model_kicker %}Numerical Toolbox{% endblock %}
+{% block model_title %}Numerical Horizontal Model - Multiple Simulation{% endblock %}
+{% block toolbox_href %}{{ url_for('numerical_bp.numerical_landing') }}{% endblock %}
+{% block toolbox_label %}All numerical models{% endblock %}
+{% block model_about_link %}
+<a class="ghost-btn model-workbench-back" href="{{ url_for('numerical_bp.numerical_horizontal_single') }}">Single simulation</a>
+{% endblock %}

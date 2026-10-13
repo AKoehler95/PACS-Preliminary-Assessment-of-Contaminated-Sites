@@ -1,0 +1,255 @@
+{% if input_fields %}
+{% set standard_fields = input_fields | rejectattr('advanced') | list %}
+{% set advanced_fields = input_fields | selectattr('advanced') | list %}
+{% set db_fields = standard_fields | selectattr('from_db') | list %}
+{% set manual_fields = standard_fields | rejectattr('from_db') | list %}
+{% macro render_model_input(field) -%}
+<label>
+  <span class="input-label-row">
+    {# Label format: "<name> <symbol> [<unit>]". The symbol follows the name.
+       Dimensionless quantities retain "[-]" as required by the PACS convention. #}
+    {%- set _has_unit = ' [' in field.label -%}
+    {%- set _name = field.label.split(' [')[0] if _has_unit else field.label -%}
+    {%- set _unit = field.label.split(' [')[1]|replace(']', '') if _has_unit else '' -%}
+    <span>{{ _name }}{% if field.symbol %} <span class="param-symbol">{{ field.symbol|safe }}</span>{% endif %}{% if _unit %} [{{ _unit }}]{% endif %}{% if field.description %} <span class="param-help" tabindex="0" role="note" aria-label="{{ field.description }}">i<span class="param-help__tip" role="tooltip">{{ field.description }}</span></span>{% endif %}</span>
+    {# Only flag a positive source: DB when a value was loaded from the database,
+       Override for advanced fields. Plain manual inputs carry no per-field badge
+       (the column header already says "User / DB" / "Editable"). #}
+    {% if field.from_db %}
+    <em class="input-source-badge input-source-badge--db">DB</em>
+    {% elif field.advanced %}
+    <em class="input-source-badge input-source-badge--advanced">Override</em>
+    {% endif %}
+  </span>
+  {# field.checkbox: an on/off input (e.g. the horizontal full-source tick box).
+     An unticked box submits nothing, so a "0" behind it keeps ticked and
+     unticked apart from never-submitted. The box is written first, so the
+     value read first is the answer. #}
+  {% if field.checkbox %}
+  <span class="model-input-check">
+    <input type="checkbox" name="{{ field.name }}" value="1"
+           {% if field.value %}checked{% endif %}>
+    <input type="hidden" name="{{ field.name }}" value="0">
+  </span>
+  {# field.buttons: the choices as stacked click buttons (e.g. the segment
+     count). The radio covers its whole button, so every click lands on it
+     rather than on the outer label's first control. #}
+  {% elif field.buttons %}
+  <span class="model-input-choice">
+    {% for value, caption in field.choices %}
+    <span class="model-input-choice__opt"><input type="radio" name="{{ field.name }}" value="{{ value }}"
+          {% if value == field.value %}checked{% endif %}>{{ caption }}</span>
+    {% endfor %}
+  </span>
+  {# field.choices: a fixed set of options (e.g. the vertical source position). #}
+  {% elif field.choices %}
+  <select name="{{ field.name }}">
+    {% for value, caption in field.choices %}
+    <option value="{{ value }}" {% if value == field.value %}selected{% endif %}>{{ caption }}</option>
+    {% endfor %}
+  </select>
+  {# field.text: a free-text input (e.g. the source segment list), not a number. #}
+  {% elif field.text %}
+  <input
+    type="text"
+    name="{{ field.name }}"
+    {% if field.placeholder %}placeholder="{{ field.placeholder }}"{% endif %}
+    value="{{ field.value or '' }}"
+  >
+  {% else %}
+  <input
+    type="number"
+    step="any"
+    {% if field.min is not none %}min="{{ field.min }}"{% endif %}
+    name="{{ field.name }}"
+    {% if field.value is not none %}value="{{ '%.6g'|format(field.value) }}"{% endif %}
+  >
+  {% endif %}
+</label>
+{%- endmacro %}
+{# One grouped card of numerical inputs (chemical / physical / standard / numerical). #}
+{% macro render_input_group(heading, col) -%}
+<section class="model-input-group" aria-label="{{ heading }} parameters">
+  <div class="model-input-group-header"><h4>{{ heading }}</h4></div>
+  <div class="model-input-grid">
+    {% for field in input_fields if field.column == col %}
+    {{ render_model_input(field) }}
+    {% endfor %}
+  </div>
+</section>
+{%- endmacro %}
+<div class="card-like external-input-card">
+  <h3>Input Parameters</h3>
+  <form method="GET" class="model-input-form" id="model-input-form">
+    <input type="hidden" name="run" value="1">
+    {% if selected_site_id %}
+    <input type="hidden" name="site_id" value="{{ selected_site_id }}">
+    {% endif %}
+    {# On a multiple page the picked sites live in the sidebar's own form. Carry
+       them, or running the model would submit an empty pick and blank the graph. #}
+    {% for sid in compare_site_ids | default([]) %}
+    <input type="hidden" name="compare_sites" value="{{ sid }}">
+    {% endfor %}
+
+    {% if analytical_fields is defined %}
+    {# Numerical form: editable inputs grouped by kind, two columns of grouped cards
+       to avoid whitespace. The domain-sizing (analytical) values are not inputs —
+       they are explained in a box under the Conceptual Model. #}
+    <div class="model-input-groups-2col">
+      <div class="model-input-col">
+        {{ render_input_group("Chemical", "chemical") }}
+        {{ render_input_group("Standard", "standard") }}
+      </div>
+      <div class="model-input-col">
+        {{ render_input_group("Physical", "physical") }}
+        {{ render_input_group("Numerical", "numerical") }}
+      </div>
+    </div>
+    {% else %}
+    <div class="model-input-columns">
+      <section class="model-input-group model-input-group--db" aria-labelledby="database-inputs-heading">
+        <div class="model-input-group-header">
+          <h4 id="database-inputs-heading">Database Inputs</h4>
+        </div>
+        {% if db_fields %}
+        <div class="model-input-grid">
+          {% for field in db_fields %}
+          {{ render_model_input(field) }}
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="model-input-empty">No database inputs loaded.</p>
+        {% endif %}
+      </section>
+
+      <section class="model-input-group model-input-group--manual" aria-labelledby="manual-inputs-heading">
+        <div class="model-input-group-header">
+          <h4 id="manual-inputs-heading">Manual Model Inputs</h4>
+        </div>
+        {% if manual_fields %}
+        <div class="model-input-grid">
+          {% for field in manual_fields %}
+          {{ render_model_input(field) }}
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="model-input-empty">All inputs are loaded from the database.</p>
+        {% endif %}
+      </section>
+    </div>
+    {% endif %}
+
+    {% if advanced_fields %}
+    <details class="model-input-advanced">
+      <summary>Advanced Overrides</summary>
+      <p class="model-input-empty">Leave blank to size the simulation domain automatically from the analytical model.</p>
+      <div class="model-input-grid">
+        {% for field in advanced_fields %}
+        {{ render_model_input(field) }}
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+
+    {% if not (run_button_under_conceptual | default(false)) %}
+    <div class="model-input-actions">
+      <button type="submit" class="primary-btn">Run Model</button>
+    </div>
+    {% endif %}
+    <p class="small model-input-estimate" hidden></p>
+  </form>
+</div>
+{# Source geometry rows follow the Full Source tick box: ticked, the segment
+   count / direction / coverage are hidden, and the segment count decides how
+   many Y start/end pairs are shown. Hidden rows are also disabled, so the
+   browser never submits them and the model gets the full-source defaults. #}
+<script>
+(function () {
+  const form = document.getElementById("model-input-form");
+  if (!form || !form.elements.source_full) return;
+  // A repeated name (the tick box and the hidden "0" behind it, or a radio
+  // group) comes back as a list rather than an element.
+  const field = (name) => {
+    const found = form.elements[name];
+    return found && (found.closest ? found : found[0]);
+  };
+  const show = (name, on) => {
+    const el = field(name);
+    const row = el && el.closest("label");
+    if (!row) return;
+    row.hidden = !on;
+    for (const input of row.querySelectorAll("input, select")) input.disabled = !on;
+  };
+  const sync = () => {
+    const full = field("source_full").checked;
+    const count = form.elements.source_segment_count;
+    const wanted = full || !count ? 0 : parseInt(count.value, 10) || 0;
+    show("source_segment_count", !full);
+    show("source_direction", !full);
+    show("source_percentage", !full);
+    for (let n = 1; field("y" + n + "_start"); n++) {
+      show("y" + n + "_start", n <= wanted);
+      show("y" + n + "_end", n <= wanted);
+    }
+  };
+  form.addEventListener("change", sync);
+  sync();
+})();
+</script>
+{# Long-run notice for the numerical single pages: the grid is sized from the
+   analytical domain length the model derives, so the cell count is known
+   before running. Measured cost is ~linear in cells for both models (50 time
+   steps each): 57k cells ~ 1 min, 1.2M cells ~ 20 min -> cells / 1000 s. #}
+<script>
+(function () {
+  const form = document.getElementById("model-input-form");
+  const note = form && form.querySelector(".model-input-estimate");
+  const el = form && form.elements;
+  if (!note || !el || !el.gamma || !el.C_D || !el.C_A || !el.grid_size) return;
+  const horizontal = !!(el.source_thickness && el.at);
+  if (!horizontal && !(el.Lz && el.atv)) return;
+  const num = (name) => parseFloat(el[name].value);
+  // Giles (2010) single-precision erfinv: ~1e-3 relative, enough for an estimate.
+  const erfinv = (x) => {
+    let w = -Math.log((1 - x) * (1 + x)), p;
+    if (w < 5) {
+      w -= 2.5;
+      p = 2.81022636e-08; p = 3.43273939e-07 + p * w; p = -3.5233877e-06 + p * w;
+      p = -4.39150654e-06 + p * w; p = 0.00021858087 + p * w; p = -0.00125372503 + p * w;
+      p = -0.00417768164 + p * w; p = 0.246640727 + p * w; p = 1.50140941 + p * w;
+    } else {
+      w = Math.sqrt(w) - 3;
+      p = -0.000200214257; p = 0.000100950558 + p * w; p = 0.00134934322 + p * w;
+      p = -0.00367342844 + p * w; p = 0.00573950773 + p * w; p = -0.0076224613 + p * w;
+      p = 0.00943887047 + p * w; p = 1.00167406 + p * w; p = 2.83297682 + p * w;
+    }
+    return p * x;
+  };
+  const cells = () => {
+    const dx = num("grid_size"), g = num("gamma"), cd = num("C_D"), ca = num("C_A");
+    let lx, cross;
+    if (horizontal) {
+      const sw = num("source_thickness"), at = num("at");
+      lx = 1.5 * sw * sw / (16 * at * Math.pow(erfinv(ca / (g * cd + ca)), 2));
+      cross = 5 * sw;
+    } else {
+      const lz = num("Lz"), atv = num("atv");
+      lx = 1.5 * 4 * lz * lz / (Math.PI * Math.PI * atv) * Math.log((4 * g * cd + ca) / (Math.PI * ca));
+      cross = lz;
+    }
+    return Math.floor(lx / dx) * Math.floor(cross / dx);
+  };
+  const update = () => {
+    const n = cells();
+    const minutes = n / 1000 / 60;
+    note.hidden = !(isFinite(n) && minutes > 2);
+    if (!note.hidden) {
+      note.textContent = "≈ " + n.toLocaleString() + " grid cells — this run will take roughly " +
+        (minutes < 60 ? Math.round(minutes) + " min." : (minutes / 60).toFixed(1) + " h.");
+    }
+  };
+  form.addEventListener("input", update);
+  update();
+})();
+</script>
+{% endif %}

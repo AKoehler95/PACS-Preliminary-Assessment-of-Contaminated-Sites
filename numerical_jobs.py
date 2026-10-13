@@ -1,0 +1,339 @@
+from __future__ import annotations
+
+import json
+import logging
+import os
+import pickle
+import signal
+import sqlite3
+import subprocess
+import sys
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+
+STATUSES = {"queued", "running", "done", "failed", "cancelled"}
+
+logger = logging.getLogger(__name__)
+
+# Shown when the run died for a reason the reader cannot act on; the cause is logged.
+STOPPED_MESSAGE = "The simulation stopped unexpectedly. Please run it again."
+
+
+def _job_root() -> Path:
+    root = Path(os.getenv("NUMERICAL_JOB_ROOT", ".numerical_jobs"))
+    root.mkdir(exist_ok=True)
+    (root / "results").mkdir(exist_ok=True)
+    (root / "logs").mkdir(exist_ok=True)
+    return root
+
+
+def _db_path() -> Path:
+    return _job_root() / "jobs.sqlite3"
+
+
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(_db_path(), timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS numerical_jobs (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            params_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            started_at REAL,
+            finished_at REAL,
+            pid INTEGER,
+            result_path TEXT,
+            plume_length REAL,
+            error TEXT,
+            cancel_requested INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    return conn
+
+
+def max_concurrency() -> int:
+    return max(1, int(os.getenv("NUMERICAL_MAX_CONCURRENCY", "2")))
+
+
+def submit_job(kind: str, params: dict[str, Any]) -> str:
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    # Enqueue only. Do NOT cancel other jobs -- they queue and run when a slot frees
+    # (max_concurrency). Manual cancellation goes through cancel_job().
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            INSERT INTO numerical_jobs (id, kind, params_json, status, created_at, updated_at)
+            VALUES (?, ?, ?, 'queued', ?, ?)
+            """,
+            (job_id, kind, json.dumps(params), now, now),
+        )
+    pump_queue()
+    return job_id
+
+
+def _meta_path(job_id: str) -> Path:
+    return _job_root() / "results" / f"{job_id}.meta.json"
+
+
+def save_job_meta(job_id: str, meta: dict[str, Any]) -> None:
+    """Persist route-level job metadata (owner, report context) next to results."""
+    with open(_meta_path(job_id), "w", encoding="utf-8") as handle:
+        json.dump(meta, handle)
+
+
+def load_job_meta(job_id: str) -> dict[str, Any] | None:
+    try:
+        with open(_meta_path(job_id), "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+
+def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    data = dict(row)
+    if data["status"] == "queued":
+        with _connect() as conn:
+            pos = conn.execute(
+                """
+                SELECT COUNT(*) FROM numerical_jobs
+                WHERE status = 'queued'
+                  AND (created_at < ? OR (created_at = ? AND id <= ?))
+                """,
+                (data["created_at"], data["created_at"], data["id"]),
+            ).fetchone()[0]
+        data["queue_position"] = int(pos)
+    return data
+
+
+def job_status(job_id: str) -> dict[str, Any] | None:
+    pump_queue()
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM numerical_jobs WHERE id = ?", (job_id,)).fetchone()
+    return _row_to_dict(row)
+
+
+def queue_counts() -> dict[str, int]:
+    pump_queue()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS count FROM numerical_jobs GROUP BY status"
+        ).fetchall()
+    counts = {status: 0 for status in STATUSES}
+    counts.update({row["status"]: int(row["count"]) for row in rows})
+    counts["max_concurrency"] = max_concurrency()
+    return counts
+
+
+def fetch_result(job_id: str) -> Any:
+    with _connect() as conn:
+        row = conn.execute("SELECT result_path FROM numerical_jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None or not row["result_path"]:
+        raise KeyError(f"No completed numerical result for job {job_id}")
+    with open(row["result_path"], "rb") as handle:
+        return pickle.load(handle)
+
+
+def cancel_job(job_id: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute("SELECT status, pid FROM numerical_jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            return False
+        if row["status"] in {"done", "failed", "cancelled"}:
+            return False
+        now = time.time()
+        conn.execute(
+            "UPDATE numerical_jobs SET cancel_requested = 1, status = 'cancelled', updated_at = ?, finished_at = ? WHERE id = ?",
+            (now, now, job_id),
+        )
+        pid = row["pid"]
+    if pid:
+        _terminate_pid(int(pid))
+    pump_queue()
+    return True
+
+
+def mark_done(job_id: str, result: Any) -> None:
+    result_path = _job_root() / "results" / f"{job_id}.pickle"
+    with open(result_path, "wb") as handle:
+        pickle.dump(result, handle)
+    plume_length = float(getattr(result, "plume_length", 0.0))
+    now = time.time()
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE numerical_jobs
+            SET status = 'done', updated_at = ?, finished_at = ?, result_path = ?, plume_length = ?
+            WHERE id = ? AND status != 'cancelled'
+            """,
+            (now, now, str(result_path), plume_length, job_id),
+        )
+    pump_queue()
+
+
+def mark_failed(job_id: str, error: str) -> None:
+    now = time.time()
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE numerical_jobs
+            SET status = 'failed', updated_at = ?, finished_at = ?, error = ?
+            WHERE id = ? AND status != 'cancelled'
+            """,
+            (now, now, error, job_id),
+        )
+    pump_queue()
+
+
+def load_job_payload(job_id: str) -> tuple[str, dict[str, Any]]:
+    with _connect() as conn:
+        row = conn.execute("SELECT kind, params_json FROM numerical_jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        raise KeyError(f"Unknown numerical job {job_id}")
+    return row["kind"], json.loads(row["params_json"])
+
+
+def _pid_alive(pid: Any) -> bool:
+    """Best-effort check that a worker process is still alive."""
+    if not pid:
+        return False
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if os.name == "nt":
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}"],
+            capture_output=True, text=True, check=False,
+        )
+        return str(pid) in (out.stdout or "")
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _reap_stale_jobs(conn: sqlite3.Connection) -> None:
+    """Free queue slots held by dead/hung workers.
+
+    A `running` job whose worker process has exited (e.g. after a container
+    restart) keeps its concurrency slot forever, so the queue stalls and newly
+    submitted jobs never start. Mark such jobs failed: their pid is gone, or they
+    have run past the wall-clock timeout, or they were claimed but never acquired
+    a pid within a short grace period. Must be called inside an open transaction.
+    """
+    now = time.time()
+    timeout = float(os.getenv("NUMERICAL_JOB_TIMEOUT_SECONDS", "900"))
+    grace = 60.0
+    rows = conn.execute(
+        "SELECT id, pid, started_at FROM numerical_jobs WHERE status = 'running'"
+    ).fetchall()
+    for row in rows:
+        started = row["started_at"] or 0.0
+        age = now - started if started else None
+        if row["pid"] is None:
+            # Just claimed by pump_queue; give the worker time to register its pid.
+            if age is not None and age < grace:
+                continue
+            detail = "Worker process never started (reaped)."
+        elif not _pid_alive(row["pid"]):
+            detail = "Worker process exited before completing (reaped)."
+        elif age is not None and age > timeout:
+            detail = f"Worker exceeded the {int(timeout)}s timeout (reaped)."
+        else:
+            continue
+        logger.warning("Job %s failed: %s", row["id"], detail)
+        reason = STOPPED_MESSAGE
+        conn.execute(
+            "UPDATE numerical_jobs SET status = 'failed', updated_at = ?, finished_at = ?, error = ? "
+            "WHERE id = ? AND status = 'running'",
+            (now, now, reason, row["id"]),
+        )
+
+
+def pump_queue() -> None:
+    while True:
+        with _connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            _reap_stale_jobs(conn)
+            running = conn.execute(
+                "SELECT COUNT(*) FROM numerical_jobs WHERE status = 'running'"
+            ).fetchone()[0]
+            if running >= max_concurrency():
+                conn.commit()
+                return
+            row = conn.execute(
+                "SELECT id FROM numerical_jobs WHERE status = 'queued' ORDER BY created_at, id LIMIT 1"
+            ).fetchone()
+            if row is None:
+                conn.commit()
+                return
+            job_id = row["id"]
+            now = time.time()
+            conn.execute(
+                "UPDATE numerical_jobs SET status = 'running', started_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, job_id),
+            )
+            conn.commit()
+        _start_worker(job_id)
+
+
+def _start_worker(job_id: str) -> None:
+    logs = _job_root() / "logs"
+    stdout_path = logs / f"{job_id}.out.log"
+    stderr_path = logs / f"{job_id}.err.log"
+    stdout = open(stdout_path, "ab")
+    stderr = open(stderr_path, "ab")
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "numerical_job_worker", job_id],
+            cwd=Path.cwd(),
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=(os.name != "nt"),
+        )
+    except Exception as exc:
+        stdout.close()
+        stderr.close()
+        logger.exception("Unable to start numerical worker for job %s", job_id)
+        mark_failed(job_id, STOPPED_MESSAGE)
+        return
+    with _connect() as conn:
+        updated = conn.execute(
+            "UPDATE numerical_jobs SET pid = ?, updated_at = ? WHERE id = ? AND status = 'running'",
+            (proc.pid, time.time(), job_id),
+        ).rowcount
+    if not updated:
+        _terminate_pid(proc.pid)
+
+
+def _terminate_pid(pid: int) -> None:
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except ProcessLookupError:
+        return

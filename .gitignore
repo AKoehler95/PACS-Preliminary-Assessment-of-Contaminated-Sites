@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.DS_Store
+
+# Virtual environments
+.env
+venv/
+.env/
+.env*/
+.venv/
+.venv*/
+
+# VS Code
+.vscode/
+
+# Byte-compiled / optimized / DLL files
+*.so
+*.dll
+*.dylib
+
+# Logs
+*.log
+
+# Local DBs (if you don't want to commit them)
+*.db
+*.sqlite
+*.sqlite3
+
+# Panel / Bokeh cache
+.bokeh/
+panel-temp/
+
+# Local runtime artifacts
+.numerical_runs/
+.numerical_jobs/
+.aem_exports/
+# AEM run outputs (the synced model writes here instead of the old Results/)
+sim_runs/
+tmp*/
+.modflow_bin/
+# Linux MODFLOW solver binaries (re-fetch with:
+# python -m flopy.utils.get_modflow --subset mf6 solvers/)
+solvers/*
+!solvers/.gitkeep
+
+tmp*-cwd
